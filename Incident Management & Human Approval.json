@@ -1,0 +1,489 @@
+{
+  "name": "Incident Management & Human Approval",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "incident-intake",
+        "options": {}
+      },
+      "id": "99f62472-3992-4e77-b5f0-0328377e4162",
+      "name": "Incident Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        400
+      ],
+      "webhookId": "847973a2-542e-4d9a-abd7-538fbb977b97"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Suppress repeated alerts for the same incident within a time window\nconst staticData = $getWorkflowStaticData('global');\nconst raw = $input.item.json;\nconst body = raw.body ? raw.body : raw;\nconst incidentId = body.incidentId || body.incident_id || 'UNKNOWN';\nconst severity = (body.severity || 'INFO').toString().toUpperCase();\nconst key = severity + ':' + incidentId;\nconst now = Date.now();\nconst windowMs = 5 * 60 * 1000; // 5-minute throttle window\nstaticData.lastAlerts = staticData.lastAlerts || {};\nconst last = staticData.lastAlerts[key];\nlet suppressed = false;\nif (last && (now - last) < windowMs) {\n  suppressed = true;\n} else {\n  staticData.lastAlerts[key] = now;\n}\nreturn {\n  json: {\n    incidentId,\n    severity,\n    message: body.message || 'No message provided',\n    acknowledged: body.acknowledged === true,\n    onCallPhone: body.onCallPhone || body.phone || '',\n    throttleKey: key,\n    suppressed,\n    timestamp: new Date(now).toISOString(),\n  },\n};"
+      },
+      "id": "ef5aa620-3138-41a9-920d-b673d44a50fb",
+      "name": "Alert Throttle Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "not-suppressed",
+              "leftValue": "={{ $json.suppressed }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "235acf15-5069-4c6c-9712-13534fe5d7e1",
+      "name": "Is Alert Eligible",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        448,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.severity }}",
+                    "rightValue": "CRITICAL",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "CRITICAL"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.severity }}",
+                    "rightValue": "INFO",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "INFO"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "Other"
+        }
+      },
+      "id": "e54ef4c1-f060-4770-950e-3cf728123629",
+      "name": "Route by Severity",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        672,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ack-check",
+              "leftValue": "={{ $('Alert Throttle Check').item.json.acknowledged }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "782f370a-b28d-4356-9d0f-02921254b5d4",
+      "name": "Is Acknowledged?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        896,
+        96
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "ecd7c11e-a91d-4518-95fc-e675db9ddcee",
+      "name": "Acknowledged - No Escalation",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "decision-check",
+              "leftValue": "={{ $json.body.decision || $json.query.decision }}",
+              "rightValue": "approved",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "8833232b-97c3-47c8-b0fd-ee6586790929",
+      "name": "Is Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1120,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#incidents"
+        },
+        "text": "=:white_check_mark: Incident *{{ $('Alert Throttle Check').item.json.incidentId }}* remediation was *APPROVED*.",
+        "otherOptions": {}
+      },
+      "id": "92cb8486-e556-4804-be8c-b22c2015d743",
+      "name": "Notify Approved",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        1344,
+        96
+      ],
+      "webhookId": "824d7481-4726-426f-ade1-e8904ad484ce"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#incidents"
+        },
+        "text": "=:x: Incident *{{ $('Alert Throttle Check').item.json.incidentId }}* remediation was *REJECTED*.",
+        "otherOptions": {}
+      },
+      "id": "81642992-1ecf-417d-bda0-6a3649753f86",
+      "name": "Notify Rejected",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        1344,
+        288
+      ],
+      "webhookId": "a48da513-cd11-4b1f-83b4-b038a6ec45b0"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#incidents-info"
+        },
+        "text": "=:information_source: *INFO EVENT*\n*Incident ID:* {{ $json.incidentId }}\n*Message:* {{ $json.message }}\n*Timestamp:* {{ $json.timestamp }}",
+        "otherOptions": {}
+      },
+      "id": "cf0cd885-18e0-4654-9528-78fabb698422",
+      "name": "Send Info Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        896,
+        288
+      ],
+      "webhookId": "31dcc45a-5a78-4a32-aba7-e3d059f6333a"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#incidents-info"
+        },
+        "text": "=:grey_question: *UNCLASSIFIED EVENT*\n*Incident ID:* {{ $json.incidentId }}\n*Severity:* {{ $json.severity }}\n*Message:* {{ $json.message }}\n*Timestamp:* {{ $json.timestamp }}",
+        "otherOptions": {}
+      },
+      "id": "98d91264-237c-422b-8b52-bc6addb19258",
+      "name": "Send Other Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.7,
+      "position": [
+        896,
+        480
+      ],
+      "webhookId": "2d0084f3-7ec8-43b0-91b6-820fad040962"
+    },
+    {
+      "parameters": {},
+      "id": "10f999bd-a7ca-4613-aaf8-66bbcd55065d",
+      "name": "Suppress Duplicate Alert",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        672,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Incident Management & Human Approval Workflow\n\n- Exercise 1: Webhook trigger + severity routing\n- Exercise 2: Throttle check (static data) + Slack alerts\n- Exercise 3: SLA Wait (10 min) + Twilio SMS escalation\n- Exercise 4: Interactive Slack approval + webhook resume + decision routing\n\nSLA testing tip: lower the SLA Wait to 30 seconds when demonstrating.",
+        "height": 320,
+        "width": 400
+      },
+      "id": "6e16ab8e-8c5d-4e68-a9da-bae20e60d0df",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Exercise 1 & 2 — Intake, Throttle & Routing\nWebhook receives the incident, the Code node throttles duplicates via workflow static data, and the Switch routes by severity (CRITICAL / INFO / Other).",
+        "height": 260,
+        "width": 420,
+        "color": 4
+      },
+      "id": "f5fcf1d2-957e-4e00-9281-f86eb0c9420d",
+      "name": "Intake & Routing",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Exercise 3 — SLA Wait & SMS Escalation\nCritical incidents wait the SLA period, then unacknowledged ones escalate to the on-call recipient via Twilio SMS.",
+        "height": 260,
+        "width": 420,
+        "color": 5
+      },
+      "id": "9b1338aa-2302-48d1-8b49-459af183c355",
+      "name": "SLA & Escalation",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        608,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Exercise 4 — Human Approval & Decision\nInteractive Slack card with Approve/Reject, workflow resumes on the POST slack-approval-response webhook, then routes the Approved / Rejected paths.",
+        "height": 260,
+        "width": 440,
+        "color": 6
+      },
+      "id": "f46291f6-00b4-4d0e-bf03-44514eb2a0ae",
+      "name": "Approval & Decision",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1312,
+        -240
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Incident Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Alert Throttle Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Throttle Check": {
+      "main": [
+        [
+          {
+            "node": "Is Alert Eligible",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Alert Eligible": {
+      "main": [
+        [
+          {
+            "node": "Route by Severity",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Suppress Duplicate Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Severity": {
+      "main": [
+        [
+          {
+            "node": "Is Acknowledged?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Info Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Other Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Acknowledged?": {
+      "main": [
+        [
+          {
+            "node": "Acknowledged - No Escalation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Approved?": {
+      "main": [
+        [
+          {
+            "node": "Notify Approved",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Notify Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "0413e9e4-cd3d-4838-b9b6-e8a2ac69d7de",
+  "meta": {
+    "instanceId": "201381d913fa9e78389f7093cb99cedc70c766251a500f897db19feccfda3bd0"
+  },
+  "nodeGroups": [],
+  "id": "cniBd1rlpDVzPgpC",
+  "tags": []
+}
